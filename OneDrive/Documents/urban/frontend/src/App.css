@@ -1,0 +1,9 @@
+@import "tailwindcss";
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background-color: black;
+}
+/* Hide MapLibre watermark for cleaner UI */
+.maplibregl-ctrl-bottom-right { display: none !important; }

@@ -1,0 +1,23 @@
+{
+  "name": "urban",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "install-all": "npm install && cd frontend && npm install && cd ..",
+    "build": "cd frontend && npm run build && cd ..",
+    "start": "node server.js",
+    "dev": "concurrently -n SERVER,FRONTEND -c blue,magenta \"node server.js\" \"cd frontend && npm run dev\""
+  },
+  "dependencies": {
+    "axios": "^1.18.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^4.22.2",
+    "ml-random-forest": "^2.1.0",
+    "mongoose": "^9.7.3"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.3"
+  }
+}
