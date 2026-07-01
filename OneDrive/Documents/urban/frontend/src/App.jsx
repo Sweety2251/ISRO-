@@ -2,7 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { Search, Mic, Satellite, Wind, MapPin, CheckCircle, RefreshCcw, Droplets, Clock, TrendingUp, Award } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+
+// ---------------------------------------------------------------------------
+// Backend URL — relative in dev (Vite proxy), absolute in production
+// ---------------------------------------------------------------------------
+const API = import.meta.env.VITE_API_URL || 'https://ideal-enchantment-production-5544.up.railway.app';
 
 const App = () => {
   const mapContainer = useRef(null);
@@ -47,7 +52,7 @@ const App = () => {
     recognitionRef.current.onstart = () => setIsListening(true);
 
     recognitionRef.current.onresult = (event) => {
-      clearTimeout(silenceTimer.current); // Reset timer on every word
+      clearTimeout(silenceTimer.current);
 
       const transcript = Array.from(event.results)
         .map(result => result[0].transcript)
@@ -55,7 +60,6 @@ const App = () => {
 
       setSearchText(transcript);
 
-      // AUTO-SEARCH AFTER 1.5 SECONDS OF SILENCE
       silenceTimer.current = setTimeout(() => {
         stopMicAndSearch(transcript);
       }, 1500);
@@ -90,7 +94,7 @@ const App = () => {
     setLoading(true);
     setErrorMsg("");
     try {
-      const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+      const res = await fetch(`${API}/api/search?q=${encodeURIComponent(query)}`);
       const result = await res.json();
 
       if (!res.ok) {
@@ -110,7 +114,7 @@ const App = () => {
         map.current.fitBounds(bounds, {
           padding: 100,
           duration: 2500,
-          maxZoom: 10 // Balanced zoom to keep context
+          maxZoom: 10
         });
 
         renderNeonBorders(result.geojson, result.isHot);
@@ -120,7 +124,7 @@ const App = () => {
       }
     } catch (e) {
       console.error(e);
-      setErrorMsg("Could not reach backend — is server.js running on port 5000?");
+      setErrorMsg("Could not reach backend — check your connection");
     } finally {
       setLoading(false);
     }
@@ -149,13 +153,13 @@ const App = () => {
     });
   };
 
-  // --- ML INSIGHTS: fetch zone distribution + feature importance ---
+  // --- ML INSIGHTS ---
   const loadMLOverview = async () => {
     setMlLoading(true);
     try {
       const [zoneRes, importanceRes] = await Promise.all([
-        fetch('/api/zone-distribution'),
-        fetch('/api/feature-importance')
+        fetch(`${API}/api/zone-distribution`),
+        fetch(`${API}/api/feature-importance`)
       ]);
       const zoneData = await zoneRes.json();
       const importanceData = await importanceRes.json();
@@ -168,10 +172,9 @@ const App = () => {
     }
   };
 
-  // --- ML INSIGHTS: run cooling simulation for current searched zone's temp ---
   const runCoolingSimulation = async (currentTemp) => {
     try {
-      const res = await fetch('/api/simulate', {
+      const res = await fetch(`${API}/api/simulate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ current_temp: parseFloat(currentTemp) })
@@ -192,21 +195,18 @@ const App = () => {
     }
   }, [activeTab, data]);
 
-  // --- THE RESET FEATURE (DONE BUTTON) ---
+  // --- RESET ---
   const handleDone = () => {
-    // 1. Clear Data and Search
     setData(null);
     setSearchText("");
     setErrorMsg("");
     setCoolingSolutions([]);
     setActiveTab('heat');
 
-    // 2. Remove Highlighting Layers
     const layers = ['glow-out', 'glow-in', 'line-sharp'];
     layers.forEach(l => map.current.getLayer(l) && map.current.removeLayer(l));
     if (map.current.getSource('region')) map.current.removeSource('region');
 
-    // 3. Reset Map View
     map.current.flyTo({ center: [78.9629, 20.5937], zoom: 4, pitch: 45 });
   };
 
@@ -222,7 +222,7 @@ const App = () => {
         <h1 className="text-white font-black text-sm sm:text-xl italic tracking-tighter hidden xs:block">BHUVAN_RADAR</h1>
       </div>
 
-      {/* YOUTUBE STYLE MIC & SEARCH */}
+      {/* SEARCH BAR */}
       <div className="absolute top-20 sm:top-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl px-3 sm:px-4">
         <div className={`flex items-center bg-slate-900/95 border-2 ${isListening ? 'border-red-500 shadow-[0_0_30px_rgba(239,68,68,0.4)]' : 'border-white/10'} rounded-2xl sm:rounded-3xl backdrop-blur-xl transition-all`}>
           <Search className="ml-3 sm:ml-6 text-slate-500 shrink-0" size={18} />
@@ -255,7 +255,7 @@ const App = () => {
         )}
       </div>
 
-      {/* STANDALONE ML INSIGHTS TOGGLE (works even before any search) */}
+      {/* ML INSIGHTS TOGGLE */}
       {!data && (
         <button
           onClick={() => { setData({ standalone: true, temp: '42.0', isHot: true, name: 'Sample Zone Analysis' }); setActiveTab('ml'); }}
@@ -265,7 +265,7 @@ const App = () => {
         </button>
       )}
 
-      {/* DATA TABLE */}
+      {/* DATA PANEL */}
       {data && (
         <div className="absolute inset-x-3 bottom-24 sm:inset-x-auto sm:bottom-auto sm:top-6 sm:right-6 z-20 w-auto sm:w-80 max-h-[60vh] sm:max-h-[85vh] overflow-y-auto space-y-3 sm:space-y-4">
           <div className="flex bg-slate-900/95 p-1 rounded-xl sm:rounded-2xl border border-white/10 backdrop-blur-md">
@@ -375,7 +375,7 @@ const App = () => {
         </div>
       )}
 
-      {/* DONE BUTTON (BOTTOM RIGHT) */}
+      {/* DONE BUTTON */}
       <button
         onClick={handleDone}
         className="absolute bottom-3 right-3 sm:bottom-8 sm:right-8 z-30 group flex items-center gap-2 sm:gap-3 bg-emerald-600 hover:bg-emerald-500 text-white px-4 sm:px-8 py-2.5 sm:py-4 rounded-xl sm:rounded-2xl font-black text-xs sm:text-sm tracking-widest shadow-2xl transition-all active:scale-95"
@@ -387,7 +387,7 @@ const App = () => {
         </div>
       </button>
 
-      {/* FOOTER BAR */}
+      {/* FOOTER */}
       <div className="hidden sm:block absolute bottom-8 left-8 z-20 p-4 border-l-2 border-blue-600 bg-slate-900/40 text-blue-400 font-mono text-[9px] tracking-widest backdrop-blur-sm uppercase">
         Live Weather Feed: Open-Meteo <br />
         Coordinate System: WGS84
