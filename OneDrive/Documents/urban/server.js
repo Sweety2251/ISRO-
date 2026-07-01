@@ -2,12 +2,11 @@
  * COMBINED SERVER — weather/geocoding + ML model + MongoDB persistence + serves the React frontend
  * One single deployable Node.js app. Run with: node server.js
  *
- * Requires: npm install express cors axios ml-random-forest mongoose
- * Env vars: MONGODB_URI (optional, defaults to local mongo), PORT (optional)
+ * Requires: npm install express cors axios ml-random-forest mongoose dotenv
+ * Env vars: MONGODB_URI, PORT
  */
 
 require('dotenv').config();
-console.log('DEBUG MONGODB_URI loaded:', process.env.MONGODB_URI ? 'YES' : 'NO (falling back to localhost)');
 
 const express = require('express');
 const cors = require('cors');
@@ -18,7 +17,24 @@ const { RandomForestRegression } = require('ml-random-forest');
 const { SearchHistory, WeatherLog, Prediction } = require('./models');
 
 const app = express();
-app.use(cors());
+
+// ===========================================================================
+// CORS — allow local dev + deployed frontend
+// ===========================================================================
+const allowedOrigins = [
+  'http://localhost:5173',
+  'https://isro-production.up.railway.app',
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true); // curl / Postman / server-to-server
+    if (allowedOrigins.includes(origin)) return callback(null, true);
+    callback(new Error(`CORS blocked: ${origin}`));
+  },
+  credentials: true
+}));
+
 app.use(express.json());
 
 // ===========================================================================
@@ -30,8 +46,18 @@ mongoose.connect(MONGODB_URI)
   .then(() => console.log('✅ MongoDB connected'))
   .catch(err => console.error('❌ MongoDB connection error:', err.message));
 
+// DB status endpoint — visit /api/db-status to confirm connection
+app.get('/api/db-status', (req, res) => {
+  const states = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+  res.json({
+    mongoState: mongoose.connection.readyState,
+    mongoStateText: states[mongoose.connection.readyState],
+    mongoHost: mongoose.connection.host || 'not connected'
+  });
+});
+
 // ===========================================================================
-// PART 1 — WEATHER + GEOCODING (was server.js)
+// PART 1 — WEATHER + GEOCODING
 // ===========================================================================
 const cache = new Map();
 const CACHE_TTL_MS = 10 * 60 * 1000;
@@ -48,7 +74,7 @@ app.get('/api/search', async (req, res) => {
   if (!q) return res.status(400).json({ error: "Missing query" });
 
   try {
-    const geoResponse = await axios.get(`https://nominatim.openstreetmap.org/search`, {
+    const geoResponse = await axios.get('https://nominatim.openstreetmap.org/search', {
       params: { q, format: 'json', polygon_geojson: 1, limit: 1, addressdetails: 1 },
       headers: { 'User-Agent': 'ISRO_Thermal_Scanner_v3' },
       timeout: 8000
@@ -97,7 +123,7 @@ app.get('/api/search', async (req, res) => {
 
     const isHot = weather.temp >= 35;
 
-    // --- Persist to SearchHistory (fire-and-forget, don't block the response on failure) ---
+    // Persist to SearchHistory
     SearchHistory.create({
       query: q,
       name: loc.display_name,
@@ -107,10 +133,11 @@ app.get('/api/search', async (req, res) => {
       humidity: weather.humidity,
       windSpeed: weather.windSpeed,
       isHot
-    }).catch(err => console.error('⚠️  Failed to save SearchHistory:', err.message));
+    }).then(() => console.log('✅ SearchHistory saved'))
+      .catch(err => console.error('⚠️  Failed to save SearchHistory:', err.message));
 
-    // --- Upsert today's WeatherLog for this location (unique on lat/lon/date) ---
-    const today = new Date().toISOString().split('T')[0]; // 'YYYY-MM-DD'
+    // Upsert today's WeatherLog
+    const today = new Date().toISOString().split('T')[0];
     WeatherLog.findOneAndUpdate(
       { lat, lon, date: today },
       {
@@ -123,7 +150,8 @@ app.get('/api/search', async (req, res) => {
         date: today
       },
       { upsert: true, returnDocument: 'after' }
-    ).catch(err => console.error('⚠️  Failed to upsert WeatherLog:', err.message));
+    ).then(() => console.log('✅ WeatherLog upserted'))
+      .catch(err => console.error('⚠️  Failed to upsert WeatherLog:', err.message));
 
     res.json({
       lat, lon,
@@ -143,7 +171,6 @@ app.get('/api/search', async (req, res) => {
   }
 });
 
-// New: read endpoint for recent search history
 app.get('/api/history', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
@@ -154,12 +181,14 @@ app.get('/api/history', async (req, res) => {
   }
 });
 
-// New: read endpoint for a location's weather log trend (by lat/lon)
 app.get('/api/weather-log', async (req, res) => {
   try {
     const { lat, lon } = req.query;
     if (!lat || !lon) return res.status(400).json({ error: "Missing lat/lon" });
-    const logs = await WeatherLog.find({ lat: parseFloat(lat), lon: parseFloat(lon) }).sort({ date: 1 });
+    const logs = await WeatherLog.find({
+      lat: parseFloat(lat),
+      lon: parseFloat(lon)
+    }).sort({ date: 1 });
     res.json(logs);
   } catch (e) {
     res.status(500).json({ error: "Server Error", details: e.message });
@@ -167,13 +196,12 @@ app.get('/api/weather-log', async (req, res) => {
 });
 
 // ===========================================================================
-// PART 2 — ML MODEL (was ml_server.js)
+// PART 2 — ML MODEL
 // ===========================================================================
 function generateTrainingData(n = 200) {
   const X = []; const y = [];
   let seed = 42;
   const rand = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-
   for (let i = 0; i < n; i++) {
     const concrete = 10 + rand() * 85;
     const vegetation = rand() * 80;
@@ -216,7 +244,7 @@ try {
   modelTrained = true;
   console.log('✅ Random Forest trained successfully');
 } catch (e) {
-  console.error('⚠️  Random Forest training failed, retrying with different seed:', e.message);
+  console.error('⚠️  Random Forest training failed, retrying:', e.message);
   try {
     model = new RandomForestRegression({ seed: 7, nEstimators: 80 });
     model.train(scaledX, trainY);
@@ -288,7 +316,6 @@ app.post('/api/predict', async (req, res) => {
     };
   });
 
-  // --- Persist each zone prediction (fire-and-forget) ---
   Prediction.insertMany(results.map(r => ({
     zoneName: r.name,
     concretePct: r.concrete_pct,
@@ -301,14 +328,15 @@ app.post('/api/predict', async (req, res) => {
       vegetation: cachedFeatureImportance.Vegetation,
       waterDistance: cachedFeatureImportance["Water Distance"]
     }
-  }))).catch(err => console.error('⚠️  Failed to save Predictions:', err.message));
+  }))).then(() => console.log('✅ Predictions saved'))
+    .catch(err => console.error('⚠️  Failed to save Predictions:', err.message));
 
   res.json({ results, feature_importance: cachedFeatureImportance });
 });
 
 app.post('/api/simulate', async (req, res) => {
   const currentTemp = parseFloat(req.body.current_temp ?? 40);
-  const zoneName = req.body.zone_name || null; // optional: link simulation back to a named zone
+  const zoneName = req.body.zone_name || null;
 
   const solutions = Object.entries(COOLING_COEFFICIENTS).map(([intervention, coefficient]) => {
     const newTemp = round1(currentTemp + coefficient);
@@ -324,7 +352,6 @@ app.post('/api/simulate', async (req, res) => {
   const ranked = [...solutions].sort((a, b) => b.cooling_effect - a.cooling_effect);
   ranked.forEach((s, i) => { s.rank = i + 1; });
 
-  // --- Persist simulation if a zone name was supplied ---
   if (zoneName) {
     Prediction.findOneAndUpdate(
       { zoneName },
@@ -339,7 +366,7 @@ app.post('/api/simulate', async (req, res) => {
           }))
         }
       },
-      { sort: { predictedAt: -1 } } // update the most recent prediction for that zone, if any
+      { sort: { predictedAt: -1 } }
     ).catch(err => console.error('⚠️  Failed to save simulation:', err.message));
   }
 
@@ -364,7 +391,6 @@ app.get('/api/zone-distribution', (req, res) => {
   res.json({ zones });
 });
 
-// New: read endpoint for past predictions
 app.get('/api/predictions', async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 20, 100);
